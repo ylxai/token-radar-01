@@ -285,8 +285,29 @@
     );
   }
 
+  // The live list shares state.sort/state.dir with the board: a key the live columns don't carry (the
+  // board's initial 'rank', or 'age'/'implied' left over from a board sort) falls back to market cap,
+  // descending, so the view starts the same as before this table became sortable.
+  var LIVE_SORT_KEYS = { name: true, category: true, chains: true, tvl: true, growth: true, mcap: true };
+  function sortedLive(list) {
+    var key = LIVE_SORT_KEYS[state.sort] ? state.sort : 'mcap';
+    var dir = LIVE_SORT_KEYS[state.sort] ? state.dir : -1;
+    return list.slice().sort(function (a, b) {
+      var av, bv;
+      if (key === 'name') { av = a.name.toLowerCase(); bv = b.name.toLowerCase(); }
+      else if (key === 'category') { av = orNone(a.category).toLowerCase(); bv = orNone(b.category).toLowerCase(); }
+      else if (key === 'chains') { av = (a.chains || []).length; bv = (b.chains || []).length; }
+      else if (key === 'tvl') { av = a.tvl_usd; bv = b.tvl_usd; }
+      else if (key === 'growth') { av = a.change_7d === null ? -Infinity : a.change_7d; bv = b.change_7d === null ? -Infinity : b.change_7d; }
+      else { av = a.mcap_usd === null ? -Infinity : a.mcap_usd; bv = b.mcap_usd === null ? -Infinity : b.mcap_usd; }
+      if (av < bv) return -dir;
+      if (av > bv) return dir;
+      return a.slug < b.slug ? -1 : a.slug > b.slug ? 1 : 0;
+    });
+  }
+
   function liveTable() {
-    var list = filteredLive().slice().sort(function (a, b) { return (b.mcap_usd || 0) - (a.mcap_usd || 0); });
+    var list = sortedLive(filteredLive());
     if (list.length === 0) return emptyPanel(clearFilters);
     var tbody = el('tbody');
     list.forEach(function (r) {
@@ -304,15 +325,15 @@
     return el('div', { class: 'panel' },
       el('div', { class: 'table-wrap' },
         el('table', null,
-          el('caption', { text: 'These protocols already record a token: their market cap is a fact, not this model\u2019s estimate. They are set apart from the ranked board.' }),
+          el('caption', { text: 'Click a column to sort it. These protocols already record a token: their market cap is a fact, not this model\u2019s estimate. They are set apart from the ranked board.' }),
           el('thead', null, el('tr', null,
             el('th', { scope: 'col', text: 'Status' }),
-            el('th', { scope: 'col', text: 'Protocol' }),
-            el('th', { scope: 'col', text: 'Category' }),
-            el('th', { scope: 'col', text: 'Chains' }),
-            el('th', { scope: 'col', text: 'TVL' }),
-            el('th', { scope: 'col', text: '7d' }),
-            el('th', { scope: 'col', text: 'Market cap' })
+            sortHeader('name', 'Protocol'),
+            sortHeader('category', 'Category'),
+            sortHeader('chains', 'Chains'),
+            sortHeader('tvl', 'TVL'),
+            sortHeader('growth', '7d'),
+            sortHeader('mcap', 'Market cap')
           )),
           tbody
         )
@@ -328,7 +349,7 @@
     var formula = [
       'base       = tvl_usd',
       'tvlMult    = ' + m.base_multiple_max + ' - (' + m.base_multiple_max + ' - ' + m.base_multiple_min + ') x log10(tvl_usd / ' + m.tvl_ref_low + ') / log10(' + m.tvl_ref_high + ' / ' + m.tvl_ref_low + '), clamped [' + m.base_multiple_min + ', ' + m.base_multiple_max + ']',
-      'catMult    = category risk: anchor ' + c.anchor + ' / staking ' + c.staking + ' / infra ' + c.infra + ' / cex ' + c.cex + ' / unlabeled ' + c.unlabeled + ' / other ' + c.other,
+      'catMult    = category risk: core ' + c.core + ' / staking ' + c.staking + ' / infra ' + c.infra + ' / cex ' + c.cex + ' / unlabeled ' + c.unlabeled + ' / other ' + c.other,
       'chainMult  = 1 + ' + m.chain_weight + ' x log2(1 + min(chains, ' + m.chain_cap + '))',
       'growthMult = 1 + clamp(change_7d, ' + m.growth_floor + ', ' + m.growth_cap + ') / 100 x ' + m.growth_weight,
       'matureMult = ' + m.maturity_min + ' + (' + m.maturity_max + ' - ' + m.maturity_min + ') x (1 - e^(-age_days / ' + m.maturity_half_life_days + ')), unlisted age = ' + m.unknown_age_days + ' days',
@@ -340,7 +361,7 @@
       ['TVL reference ceiling', fmtUsd(m.tvl_ref_high)],
       ['Base multiple, max', m.base_multiple_max],
       ['Base multiple, min', m.base_multiple_min],
-      ['Category: anchor', c.anchor], ['Category: staking', c.staking], ['Category: infra', c.infra],
+      ['Category: core', c.core], ['Category: staking', c.staking], ['Category: infra', c.infra],
       ['Category: CEX', c.cex], ['Category: unlabeled', c.unlabeled], ['Category: other', c.other],
       ['Chain weight', m.chain_weight], ['Chain cap', m.chain_cap],
       ['Growth weight', m.growth_weight], ['Growth floor / cap', m.growth_floor + ' / ' + m.growth_cap + '%'],

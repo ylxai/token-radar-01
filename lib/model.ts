@@ -15,10 +15,10 @@
 //                  (small floats, thin liquidity, high FDV/TVL comparables); a protocol already carrying
 //                  tens of billions has none of that room left, so its multiple decays by TVL decade.
 //   categoryMult = 1.15 fee-bearing/structuring categories (Lending, Dexs, Derivatives, CDP, RWA, Risk
-//                  Curators, Onchain Capital Allocator, Yield Aggregator and the like), 0.82 commoditised
-//                  staking/restaking categories, 0.65 bridge/chain infrastructure, 0.5 CEX, 0.9 when
-//                  DefiLlama names no category, 1.0 otherwise -- the category's own risk of staying a
-//                  thin-margin utility instead of a fee- and governance-bearing protocol.
+//                  Curators, Onchain Capital Allocator, Yield Aggregator and the like -- the `core` tier),
+//                  0.82 commoditised staking/restaking categories, 0.65 bridge/chain infrastructure, 0.5
+//                  CEX, 0.9 when DefiLlama names no category, 1.0 otherwise -- the category's own risk of
+//                  staying a thin-margin utility instead of a fee- and governance-bearing protocol.
 //   chainMult    = 1 + CHAIN_WEIGHT x log2(1 + min(chains.length, CHAIN_CAP))
 //                  -- a protocol live on more chains has already built the distribution an airdrop
 //                  needs, with steeply diminishing returns past a double-digit chain count.
@@ -60,7 +60,7 @@ export interface Snapshot {
 
 /** The category classes the model rates, each a multiplier on the TVL-scaled base. */
 export interface CategoryMultipliers {
-  anchor: number;
+  core: number;
   staking: number;
   infra: number;
   cex: number;
@@ -91,7 +91,7 @@ export const MODEL: ModelConstants = {
   tvl_ref_high: 100_000_000_000,
   base_multiple_max: 0.4,
   base_multiple_min: 0.12,
-  category_multipliers: { anchor: 1.15, staking: 0.82, infra: 0.65, cex: 0.5, unlabeled: 0.9, other: 1.0 },
+  category_multipliers: { core: 1.15, staking: 0.82, infra: 0.65, cex: 0.5, unlabeled: 0.9, other: 1.0 },
   chain_weight: 0.05,
   chain_cap: 16,
   growth_weight: 0.35,
@@ -228,8 +228,8 @@ export function tvlMultiple(tvlUsd: number, model: ModelConstants): number {
   return clamp(model.base_multiple_max - (model.base_multiple_max - model.base_multiple_min) * decades, model.base_multiple_min, model.base_multiple_max);
 }
 
-/** Categories whose token, once issued, tends to carry real fees, governance or structuring weight. */
-const ANCHOR_CATEGORIES = new Set([
+/** Categories whose token, once issued, tends to carry real fees, governance or structuring weight -- the `core` tier. */
+const CORE_CATEGORIES = new Set([
   'Dexs', 'Lending', 'Derivatives', 'CDP', 'CDP Manager', 'Yield', 'Yield Aggregator', 'RWA',
   'Onchain Capital Allocator', 'Risk Curators', 'Synthetics', 'Options', 'Options Vault',
   'Prediction Market', 'Launchpad', 'Insurance', 'Privacy', 'Payments', 'AI Agents', 'Decentralized AI',
@@ -252,7 +252,7 @@ export function categoryMultiplier(category: string | null, model: ModelConstant
   if (category === 'CEX') return c.cex;
   if (INFRA_CATEGORIES.has(category) || category === 'Bridge' || category === 'Canonical Bridge') return c.infra;
   if (STAKING_CATEGORIES.has(category) || category === 'Liquid Staking' || category === 'Liquid Restaking' || category === 'Restaked BTC') return c.staking;
-  if (ANCHOR_CATEGORIES.has(category)) return c.anchor;
+  if (CORE_CATEGORIES.has(category)) return c.core;
   return c.other;
 }
 
@@ -367,27 +367,101 @@ export function holdDaysForAge(age: number | null): number {
   return 21;
 }
 
+/** One category's concrete farm action, naming the protocol and chain. */
+type FarmAction = (name: string, capital: number, chain: string) => string;
+
+const lendingAction: FarmAction = (name, capital, chain) => `Supply $${capital} of USDC as collateral on ${name} on ${chain} and leave the position open.`;
+const liquidityAction: FarmAction = (name, capital, chain) => `Add $${capital} of liquidity to ${name}'s deepest pool on ${chain} and leave it staked in the pool.`;
+const yieldAction: FarmAction = (name, capital, chain) => `Deposit $${capital} into ${name}'s main vault on ${chain} and let it auto-compound.`;
+const stakingAction: FarmAction = (name, capital, chain) => `Stake $${capital} of the chain's base asset through ${name} and hold the receipt token.`;
+const derivativesAction: FarmAction = (name, capital, chain) => `Post $${capital} of USDC as margin on ${name} and open one small, fully-hedged position.`;
+const predictionAction: FarmAction = (name, capital) => `Fund a wallet with $${capital} and take one market position on ${name}.`;
+const vaultAction: FarmAction = (name, capital, chain) => `Deposit $${capital} into a ${name} vault on ${chain} and hold the vault shares.`;
+const stableAction: FarmAction = (name, capital, chain) => `Mint or deposit $${capital} of the stable asset through ${name} on ${chain} and hold it.`;
+const rwaAction: FarmAction = (name, capital, chain) => `Mint $${capital} of ${name}'s yield-bearing asset on ${chain} and hold it.`;
+const insuranceAction: FarmAction = (name, capital, chain) => `Buy $${capital} of cover from ${name} on ${chain} and keep the policy active.`;
+const launchpadAction: FarmAction = (name, capital, chain) => `Commit $${capital} to one of ${name}'s listed sales on ${chain} and hold any allocation received.`;
+const paymentsAction: FarmAction = (name, capital, chain) => `Route $${capital} of spend through ${name} on ${chain} over several transactions.`;
+const lockerAction: FarmAction = (name, capital, chain) => `Lock or route $${capital} of tokens through ${name} on ${chain} and keep the receipt.`;
+const syntheticAction: FarmAction = (name, capital, chain) => `Mint or trade $${capital} of notional through ${name} on ${chain} with a fully-hedged position.`;
+const aiAgentAction: FarmAction = (name, capital, chain) => `Run $${capital} of activity through ${name}'s agent product on ${chain} and keep the usage logs.`;
+const indexAction: FarmAction = (name, capital, chain) => `Deposit $${capital} into one of ${name}'s index products on ${chain} and hold the shares.`;
+const chainAction: FarmAction = (name, capital) => `Bridge $${capital} onto ${name} and make one transaction with its native app (a swap or a deposit) so the chain's own explorer records activity from your wallet.`;
+const bridgeAction: FarmAction = (name, capital, chain) => `Bridge $${capital} across ${name} on ${chain} and complete one round-trip transfer so the bridge's own explorer records the activity.`;
+const basisAction: FarmAction = (name, capital, chain) => `Open one small, delta-neutral basis position on ${name} on ${chain} (long spot, short perp) and leave it open.`;
+const uncollateralizedLendingAction: FarmAction = (name, capital, chain) => `Deposit $${capital} of USDC as single-sided lending liquidity on ${name} on ${chain}; this category lends without borrower collateral, so a depositor supplies capital, not collateral.`;
+const privacyAction: FarmAction = (name, capital, chain) => `Route $${capital} through ${name}'s shielded transfer on ${chain} and keep the receipt of the private transaction.`;
+const nftAction: FarmAction = (name, capital, chain) => `Buy or sell one listing worth about $${capital} on ${name} on ${chain} and keep the transaction receipt.`;
+const oracleAction: FarmAction = (name, capital, chain) => `Report or stake $${capital} of value through ${name} on ${chain} and keep the attestation as proof of participation.`;
+const cexAction: FarmAction = (name, capital) => `Trade $${capital} of volume on ${name} and keep the account statement as proof of activity.`;
+const defaultAction: FarmAction = (name, capital, chain) => `Deposit $${capital} of USDC into ${name} on ${chain} and leave the position open.`;
+
+/**
+ * Every category the model classifies into a multiplier tier, keyed by the snapshot's own exact category
+ * string -- never a substring scan, so no category can accidentally take another's action (the old
+ * `.includes()` chain let "Chain" match an "ai" needle and "Indexes" match a "dex" needle). A category
+ * absent from this map, including no category at all, gets the one clearly-labelled `defaultAction` below.
+ */
+const FARM_ACTIONS = new Map<string, FarmAction>([
+  ['Lending', lendingAction],
+  ['CDP', lendingAction],
+  ['CDP Manager', lendingAction],
+  ['Collateral Markets', lendingAction],
+  ['Collateral Management', lendingAction],
+  ['Dexs', liquidityAction],
+  ['Liquidity Manager', liquidityAction],
+  ['Leveraged Farming', liquidityAction],
+  ['Farm', liquidityAction],
+  ['Yield', yieldAction],
+  ['Yield Aggregator', yieldAction],
+  ['Staking Pool', stakingAction],
+  ['Restaking', stakingAction],
+  ['Anchor BTC', stakingAction],
+  ['Decentralized BTC', stakingAction],
+  ['Liquid Staking', stakingAction],
+  ['Liquid Restaking', stakingAction],
+  ['Restaked BTC', stakingAction],
+  ['Derivatives', derivativesAction],
+  ['Interest Rate Derivatives', derivativesAction],
+  ['Prediction Market', predictionAction],
+  ['Onchain Capital Allocator', vaultAction],
+  ['Risk Curators', vaultAction],
+  ['CeDeFi', vaultAction],
+  ['Dual-Token Stablecoin', stableAction],
+  ['Stablecoin Issuer', stableAction],
+  ['Stablecoin Wrapper', stableAction],
+  ['Reserve Currency', stableAction],
+  ['Algo-Stables', stableAction],
+  ['RWA', rwaAction],
+  ['Insurance', insuranceAction],
+  ['Launchpad', launchpadAction],
+  ['Payments', paymentsAction],
+  ['Crypto Card Issuer', paymentsAction],
+  ['OTC Marketplace', lockerAction],
+  ['Token Locker', lockerAction],
+  ['Governance Incentives', lockerAction],
+  ['Synthetics', syntheticAction],
+  ['Options', syntheticAction],
+  ['Options Vault', syntheticAction],
+  ['AI Agents', aiAgentAction],
+  ['Decentralized AI', aiAgentAction],
+  ['Indexes', indexAction],
+  ['Chain', chainAction],
+  ['Cross Chain Bridge', bridgeAction],
+  ['Bridge', bridgeAction],
+  ['Canonical Bridge', bridgeAction],
+  ['Basis Trading', basisAction],
+  ['Uncollateralized Lending', uncollateralizedLendingAction],
+  ['Privacy', privacyAction],
+  ['NFT Marketplace', nftAction],
+  ['DOR', oracleAction],
+  ['CEX', cexAction],
+]);
+
 /** The category's one concrete action, in the words a farmer can follow, naming the protocol and chain. */
 function actionForCategory(p: SnapshotProtocol, capital: number, chain: string): string {
-  const c = (p.category ?? '').toLowerCase();
-  const name = p.name;
-  if (c.includes('lend') || c.includes('cdp') || c.includes('collateral')) return `Supply $${capital} of USDC as collateral on ${name} on ${chain} and leave the position open.`;
-  if (c.includes('dex') || c.includes('liquidity') || c.includes('leveraged farm') || c === 'farm') return `Add $${capital} of liquidity to ${name}'s deepest pool on ${chain} and leave it staked in the pool.`;
-  if (c.includes('yield')) return `Deposit $${capital} into ${name}'s main vault on ${chain} and let it auto-compound.`;
-  if (c.includes('staking') || c.includes('restak') || c.includes('anchor btc') || c.includes('decentralized btc')) return `Stake $${capital} of the chain's base asset through ${name} and hold the receipt token.`;
-  if (c.includes('perpetual') || c.includes('derivative') || c.includes('interest rate')) return `Post $${capital} of USDC as margin on ${name} and open one small, fully-hedged position.`;
-  if (c.includes('prediction')) return `Fund a wallet with $${capital} and take one market position on ${name}.`;
-  if (c.includes('curator') || c.includes('allocator') || c.includes('cedefi')) return `Deposit $${capital} into a ${name} vault on ${chain} and hold the vault shares.`;
-  if (c.includes('stable') || c.includes('reserve currency')) return `Mint or deposit $${capital} of the stable asset through ${name} on ${chain} and hold it.`;
-  if (c.includes('rwa')) return `Mint $${capital} of ${name}'s yield-bearing asset on ${chain} and hold it.`;
-  if (c.includes('insurance')) return `Buy $${capital} of cover from ${name} on ${chain} and keep the policy active.`;
-  if (c.includes('launchpad')) return `Commit $${capital} to one of ${name}'s listed sales on ${chain} and hold any allocation received.`;
-  if (c.includes('payments') || c.includes('card')) return `Route $${capital} of spend through ${name} on ${chain} over several transactions.`;
-  if (c.includes('otc') || c.includes('token locker') || c.includes('governance')) return `Lock or route $${capital} of tokens through ${name} on ${chain} and keep the receipt.`;
-  if (c.includes('synthetic') || c.includes('option')) return `Mint or trade $${capital} of notional through ${name} on ${chain} with a fully-hedged position.`;
-  if (c.includes('ai')) return `Run $${capital} of activity through ${name}'s agent product on ${chain} and keep the usage logs.`;
-  if (c.includes('index')) return `Deposit $${capital} into one of ${name}'s index products on ${chain} and hold the shares.`;
-  return `Deposit $${capital} of USDC into ${name} on ${chain} and leave the position open.`;
+  const action = p.category === null ? undefined : FARM_ACTIONS.get(p.category);
+  return (action ?? defaultAction)(p.name, capital, chain);
 }
 
 /**
